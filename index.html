@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1.0"
+		/>
+		<title>ZeroTrust Chat</title>
+		<script src="https://cdn.tailwindcss.com"></script>
+		<script src="/socket.io/socket.io.js"></script>
+		<link
+			href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap"
+			rel="stylesheet"
+		/>
+		<style>
+			:root {
+				--green: #00ff88;
+				--green-dim: #00aa55;
+				--green-dark: #003322;
+				--amber: #ffaa00;
+				--red: #ff4444;
+				--bg: #020d06;
+				--panel: #040f08;
+				--border: #005533;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				background: var(--bg);
+				color: var(--green);
+				font-family: "Share Tech Mono", monospace;
+				font-size: 16px;
+				min-height: 100vh;
+				overflow: hidden;
+			}
+			/* Scanline effect */
+			body::before {
+				content: "";
+				position: fixed;
+				inset: 0;
+				background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0, 0, 0, 0.15) 2px, rgba(0, 0, 0, 0.15) 4px);
+				pointer-events: none;
+				z-index: 999;
+			}
+			/* CRT flicker */
+			@keyframes flicker {
+				0%,
+				100% {
+					opacity: 1;
+				}
+				92% {
+					opacity: 1;
+				}
+				93% {
+					opacity: 0.97;
+				}
+				94% {
+					opacity: 1;
+				}
+				96% {
+					opacity: 0.99;
+				}
+			}
+			body {
+				animation: flicker 8s infinite;
+			}
+
+			.panel {
+				background: var(--panel);
+				border: 1px solid var(--border);
+				box-shadow:
+					0 0 20px rgba(0, 255, 136, 0.05),
+					inset 0 0 40px rgba(0, 0, 0, 0.5);
+			}
+			.glow {
+				text-shadow:
+					0 0 8px var(--green),
+					0 0 20px rgba(0, 255, 136, 0.4);
+			}
+			.glow-amber {
+				text-shadow:
+					0 0 8px var(--amber),
+					0 0 20px rgba(255, 170, 0, 0.4);
+			}
+
+			input,
+			button {
+				font-family: "Share Tech Mono", monospace;
+				outline: none;
+			}
+			.terminal-input {
+				background: transparent;
+				border: 1px solid var(--border);
+				color: var(--green);
+				padding: 8px 12px;
+				width: 100%;
+				transition:
+					border-color 0.2s,
+					box-shadow 0.2s;
+			}
+			.terminal-input:focus {
+				border-color: var(--green);
+				box-shadow: 0 0 10px rgba(0, 255, 136, 0.2);
+			}
+			.terminal-input::placeholder {
+				color: var(--green-dim);
+				opacity: 0.5;
+			}
+
+			.btn {
+				background: transparent;
+				border: 1px solid var(--green);
+				color: var(--green);
+				padding: 8px 20px;
+				cursor: pointer;
+				transition: all 0.2s;
+				letter-spacing: 0.1em;
+			}
+			.btn:hover {
+				background: var(--green);
+				color: var(--bg);
+				box-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
+			}
+			.btn-amber {
+				border-color: var(--amber);
+				color: var(--amber);
+			}
+			.btn-amber:hover {
+				background: var(--amber);
+				color: var(--bg);
+				box-shadow: 0 0 20px rgba(255, 170, 0, 0.4);
+			}
+
+			#chat-messages {
+				height: 100%;
+				overflow-y: auto;
+				scrollbar-width: thin;
+				scrollbar-color: var(--border) transparent;
+			}
+			#chat-messages::-webkit-scrollbar {
+				width: 4px;
+			}
+			#chat-messages::-webkit-scrollbar-thumb {
+				background: var(--border);
+			}
+
+			.msg-system {
+				color: var(--green-dim);
+				font-size: 0.9em;
+			}
+			.msg-user .username {
+				color: var(--amber);
+				font-weight: bold;
+			}
+			.msg-mine .username {
+				color: var(--green);
+				font-weight: bold;
+			}
+
+			/* Madlib slots */
+			.slot-pending {
+				display: inline-block;
+				border-bottom: 1px solid var(--green-dim);
+				color: var(--green-dim);
+				min-width: 80px;
+				text-align: center;
+				padding: 0 4px;
+				font-size: 0.9em;
+				vertical-align: middle;
+			}
+			.slot-filled {
+				color: var(--amber);
+				font-weight: bold;
+				text-shadow: 0 0 6px rgba(255, 170, 0, 0.5);
+			}
+			.slot-active {
+				border-bottom-color: var(--amber);
+				color: var(--amber);
+				animation: pulse-slot 1s ease-in-out infinite;
+			}
+			@keyframes pulse-slot {
+				0%,
+				100% {
+					opacity: 1;
+				}
+				50% {
+					opacity: 0.5;
+				}
+			}
+
+			.turn-indicator {
+				background: rgba(255, 170, 0, 0.08);
+				border: 1px solid rgba(255, 170, 0, 0.3);
+				border-left: 3px solid var(--amber);
+				padding: 8px 12px;
+				margin: 8px 0;
+				animation: slide-in 0.3s ease;
+			}
+			@keyframes slide-in {
+				from {
+					opacity: 0;
+					transform: translateX(-10px);
+				}
+				to {
+					opacity: 1;
+					transform: translateX(0);
+				}
+			}
+
+			.madlib-reveal {
+				background: rgba(0, 255, 136, 0.05);
+				border: 1px solid var(--green);
+				border-left: 3px solid var(--green);
+				padding: 16px;
+				margin: 12px 0;
+				animation: reveal 0.5s ease;
+				line-height: 1.8;
+			}
+			@keyframes reveal {
+				from {
+					opacity: 0;
+					transform: scale(0.98);
+				}
+				to {
+					opacity: 1;
+					transform: scale(1);
+				}
+			}
+
+			.user-pill {
+				display: inline-block;
+				border: 1px solid var(--border);
+				color: var(--green-dim);
+				padding: 3px 8px;
+				font-size: 0.9em;
+				margin: 2px;
+			}
+			.user-pill.active-turn {
+				border-color: var(--amber);
+				color: var(--amber);
+				box-shadow: 0 0 6px rgba(255, 170, 0, 0.3);
+			}
+
+			@keyframes blink {
+				0%,
+				100% {
+					opacity: 1;
+				}
+				50% {
+					opacity: 0;
+				}
+			}
+			.cursor::after {
+				content: "█";
+				animation: blink 1s step-end infinite;
+			}
+
+			#login-screen,
+			#app-screen {
+				transition: opacity 0.4s;
+			}
+
+			/* Progress bar for madlib */
+			.madlib-progress {
+				height: 2px;
+				background: var(--border);
+				margin: 8px 0;
+			}
+			.madlib-progress-fill {
+				height: 100%;
+				background: var(--green);
+				box-shadow: 0 0 8px var(--green);
+				transition: width 0.4s ease;
+			}
+		</style>
+	</head>
+	<body>
+		<!-- ── LOGIN ─────────────────────────────────────────────────────── -->
+		<div
+			id="login-screen"
+			class="fixed inset-0 flex items-center justify-center p-4"
+		>
+			<div class="panel p-8 w-full max-w-md">
+				<div class="text-center mb-8">
+					<div class="text-xs text-green-600 mb-1 tracking-widest">CLASSIFIED SYSTEM</div>
+					<h1 class="font-['Orbitron'] text-3xl font-black glow tracking-wider">ZEROTRUST</h1>
+					<div class="text-xs mt-1 opacity-50">SECURE COMMUNICATIONS TERMINAL v1.0</div>
+				</div>
+
+				<div class="mb-3 text-xs opacity-40">
+					&gt; AVAILABLE IDENTITIES:
+					<table>
+						<thead>
+							<tr>
+								<th>user</th>
+								<th>pass</th>
+							</tr>
+						</thead>
+						<tr>
+							<td>mario</td>
+							<td>pass_mario_1!</td>
+						</tr>
+
+						<tr>
+							<td>yoshi</td>
+							<td>pass_yoshi_2!</td>
+						</tr>
+						<tr>
+							<td>peach</td>
+							<td>pass_peach_3!</td>
+						</tr>
+						<tr>
+							<td>bowser</td>
+							<td>pass_bowser_4!</td>
+						</tr>
+					</table>
+				</div>
+
+				<div class="space-y-3">
+					<div>
+						<label class="text-xs opacity-60 block mb-1">&gt; IDENTITY_</label>
+						<input
+							id="login-user"
+							class="terminal-input"
+							placeholder="username"
+							autocomplete="off"
+						/>
+					</div>
+					<div>
+						<label class="text-xs opacity-60 block mb-1">&gt; PASSPHRASE_</label>
+						<input
+							id="login-pass"
+							class="terminal-input"
+							type="password"
+							placeholder="password"
+						/>
+					</div>
+					<div
+						id="login-error"
+						class="text-red-400 text-xs hidden"
+					></div>
+					<button
+						class="btn w-full tracking-widest mt-2"
+						onclick="doLogin()"
+					>
+						[ AUTHENTICATE ]
+					</button>
+				</div>
+			</div>
+		</div>
+
+		<!-- ── APP ────────────────────────────────────────────────────────── -->
+		<div
+			id="app-screen"
+			class="hidden fixed inset-0 flex flex-col"
+			style="height: 100vh"
+		>
+			<!-- Header -->
+			<div class="panel border-b flex items-center justify-between px-4 py-2 flex-shrink-0">
+				<div class="flex items-center gap-3">
+					<span class="font-['Orbitron'] text-sm font-bold glow tracking-widest">ZEROTRUST</span>
+					<span class="text-xs opacity-40">|</span>
+					<span class="text-xs opacity-50">JWT-SECURED CHANNEL</span>
+				</div>
+				<div class="flex items-center gap-3">
+					<span
+						id="header-user"
+						class="text-xs glow-amber"
+					></span>
+					<button
+						class="btn btn-amber text-xs py-1 px-3"
+						onclick="doLogout()"
+					>
+						[ DISCONNECT ]
+					</button>
+				</div>
+			</div>
+
+			<!-- Main layout -->
+			<div class="flex flex-1 overflow-hidden">
+				<!-- Sidebar -->
+				<div class="panel border-r w-48 flex-shrink-0 flex flex-col p-3 gap-4">
+					<div>
+						<div class="text-xs opacity-40 mb-2 tracking-widest">&gt; ONLINE_</div>
+						<div
+							id="user-list"
+							class="space-y-1"
+						></div>
+					</div>
+
+					<div class="border-t border-green-900 pt-3">
+						<div class="text-xs opacity-40 mb-2 tracking-widest">&gt; MADLIB_</div>
+						<div
+							id="madlib-sidebar"
+							class="text-xs opacity-40"
+						>
+							No active game
+						</div>
+						<button
+							class="btn text-xs py-1 px-2 w-full mt-2 tracking-widest"
+							onclick="sendNew()"
+							id="new-madlib-btn"
+						>
+							[ NEW GAME ]
+						</button>
+					</div>
+				</div>
+
+				<!-- Center: Chat + Madlib -->
+				<div class="flex-1 flex flex-col overflow-hidden">
+					<!-- Madlib Panel (hidden when inactive) -->
+					<div
+						id="madlib-panel"
+						class="hidden panel border-b flex-shrink-0 p-3 max-h-48 overflow-y-auto"
+					>
+						<div class="flex items-center justify-between mb-2">
+							<span
+								class="font-['Orbitron'] text-xs font-bold glow-amber tracking-widest"
+								id="madlib-title"
+							></span>
+							<span
+								class="text-xs opacity-40"
+								id="madlib-progress-label"
+							></span>
+						</div>
+						<div class="madlib-progress">
+							<div
+								class="madlib-progress-fill"
+								id="madlib-progress-fill"
+								style="width: 0%"
+							></div>
+						</div>
+						<div
+							id="madlib-story-display"
+							class="hidden leading-7 mt-2"
+						></div>
+						<div
+							id="madlib-turn-box"
+							class="turn-indicator hidden"
+						>
+							<span class="glow-amber">&gt; YOUR TURN — type a </span>
+							<span
+								class="glow-amber font-bold"
+								id="madlib-slot-type"
+							></span>
+							<span class="glow-amber"> and press Enter</span>
+						</div>
+					</div>
+
+					<!-- Chat messages -->
+					<div class="flex-1 overflow-hidden p-3">
+						<div
+							id="chat-messages"
+							class="h-full space-y-1"
+						></div>
+					</div>
+
+					<!-- Input -->
+					<div class="panel border-t p-3 flex-shrink-0">
+						<div class="flex gap-2 items-center">
+							<span class="text-green-600 text-xs opacity-60">&gt;</span>
+							<input
+								id="chat-input"
+								class="terminal-input flex-1 cursor"
+								placeholder='type a message, or "new" to start a Madlib...'
+								autocomplete="off"
+							/>
+							<button
+								class="btn text-xs py-2 px-4"
+								onclick="sendMessage()"
+							>
+								SEND
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<script>
+			let socket = null;
+			let myUsername = "";
+			let myToken = "";
+			let madlibActive = false;
+			let myTurn = false;
+			let currentSlotType = "";
+			let madlibSlots = [];
+			let madlibFilledCount = 0;
+
+			// ── Login ──────────────────────────────────────────────────────────
+			async function doLogin() {
+				const username = document.getElementById("login-user").value.trim();
+				const password = document.getElementById("login-pass").value.trim();
+				const errEl = document.getElementById("login-error");
+				errEl.classList.add("hidden");
+
+				try {
+					const res = await fetch("/login", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ username, password }),
+					});
+					if (!res.ok) {
+						errEl.textContent = "> ACCESS DENIED: Invalid credentials";
+						errEl.classList.remove("hidden");
+						return;
+					}
+					const data = await res.json();
+					myToken = data.token;
+					myUsername = data.username;
+					connectSocket();
+				} catch {
+					errEl.textContent = "> CONNECTION FAILED";
+					errEl.classList.remove("hidden");
+				}
+			}
+
+			function doLogout() {
+				if (socket) socket.disconnect();
+				myToken = "";
+				myUsername = "";
+				document.getElementById("app-screen").classList.add("hidden");
+				document.getElementById("login-screen").classList.remove("hidden");
+				document.getElementById("chat-messages").innerHTML = "";
+				document.getElementById("login-pass").value = "";
+				resetMadlibUI();
+			}
+
+			// ── Socket ─────────────────────────────────────────────────────────
+			function connectSocket() {
+				socket = io({ auth: { token: myToken } });
+
+				socket.on("connect", () => {
+					document.getElementById("login-screen").classList.add("hidden");
+					document.getElementById("app-screen").classList.remove("hidden");
+					document.getElementById("header-user").textContent = `[ ${myUsername.toUpperCase()} ]`;
+					document.getElementById("chat-input").focus();
+				});
+
+				socket.on("connect_error", (err) => {
+					const errEl = document.getElementById("login-error");
+					errEl.textContent = `> ${err.message}`;
+					errEl.classList.remove("hidden");
+				});
+
+				socket.on("chat:message", (data) => appendMessage(data));
+				socket.on("users:update", (users) => renderUserList(users));
+				socket.on("error:auth", (msg) => {
+					alert(msg);
+					doLogout();
+				});
+
+				// ── Madlib events ──
+				socket.on("madlib:start", (data) => {
+					madlibActive = true;
+					madlibSlots = data.slots;
+					madlibFilledCount = 0;
+					renderMadlibStory(data.story, data.slots, [], -1);
+					document.getElementById("madlib-title").textContent = data.title.toUpperCase();
+					document.getElementById("madlib-panel").classList.remove("hidden");
+					document.getElementById("madlib-sidebar").textContent = data.title;
+					updateProgress(0, data.slots.length);
+					myTurn = false;
+				});
+
+				socket.on("madlib:turn", (data) => {
+					myTurn = data.socketId === socket.id;
+					currentSlotType = data.slotType;
+					const turnBox = document.getElementById("madlib-turn-box");
+					if (myTurn) {
+						document.getElementById("madlib-slot-type").textContent = data.slotType.toUpperCase();
+						turnBox.classList.remove("hidden");
+						document.getElementById("chat-input").placeholder = `Type your ${data.slotType}...`;
+						document.getElementById("chat-input").focus();
+					} else {
+						turnBox.classList.add("hidden");
+						document.getElementById("chat-input").placeholder = `Waiting for ${data.username} to type a ${data.slotType}...`;
+					}
+					// Highlight active slot in story display
+					highlightActiveSlot(data.slotIndex);
+				});
+
+				socket.on("madlib:wordFilled", (data) => {
+					madlibFilledCount++;
+					fillSlotInStory(data.slotIndex, data.value);
+					updateProgress(madlibFilledCount, madlibSlots.length);
+					myTurn = false;
+					document.getElementById("madlib-turn-box").classList.add("hidden");
+				});
+
+				socket.on("madlib:reveal", (data) => {
+					appendReveal(data);
+					resetMadlibUI();
+				});
+			}
+
+			// ── Messaging ──────────────────────────────────────────────────────
+			function sendMessage() {
+				const input = document.getElementById("chat-input");
+				const text = input.value.trim();
+				if (!text || !socket) return;
+				socket.emit("chat:send", { text });
+				input.value = "";
+				input.focus();
+			}
+
+			function sendNew() {
+				if (!socket) return;
+				socket.emit("chat:send", { text: "new" });
+			}
+
+			document.addEventListener("keydown", (e) => {
+				if (e.key === "Enter") {
+					if (!document.getElementById("app-screen").classList.contains("hidden")) {
+						sendMessage();
+					} else {
+						doLogin();
+					}
+				}
+			});
+
+			// ── Chat rendering ─────────────────────────────────────────────────
+			function appendMessage(data) {
+				const container = document.getElementById("chat-messages");
+				const div = document.createElement("div");
+
+				if (data.system) {
+					div.className = "msg-system";
+					div.textContent = `  ${data.text}`;
+				} else {
+					const isMine = data.username === myUsername;
+					div.className = isMine ? "msg-mine" : "msg-user";
+					div.innerHTML = `<span class="username">${data.username}</span><span class="opacity-40"> &gt; </span>${escHtml(data.text)}`;
+				}
+
+				container.appendChild(div);
+				container.scrollTop = container.scrollHeight;
+
+				if (data.users) renderUserList(data.users);
+			}
+
+			function appendReveal(data) {
+				const container = document.getElementById("chat-messages");
+				const div = document.createElement("div");
+				div.className = "madlib-reveal";
+				// Bold filled words (marked with **word**)
+				const storyHtml = escHtml(data.story).replace(/\*\*(.+?)\*\*/g, '<span class="slot-filled">$1</span>');
+				div.innerHTML = `<div class="font-['Orbitron'] text-xs glow mb-2">&gt; ${data.title.toUpperCase()} — RESULT_</div><div>${storyHtml}</div>`;
+				container.appendChild(div);
+				container.scrollTop = container.scrollHeight;
+			}
+
+			// ── Madlib Story Display ───────────────────────────────────────────
+			let storySlotEls = [];
+
+			function renderMadlibStory(storyTemplate, slots, filledValues, activeIndex) {
+				const container = document.getElementById("madlib-story-display");
+				storySlotEls = [];
+
+				// Replace each {type} with a span element
+				let html = escHtml(storyTemplate);
+				slots.forEach((slotType, i) => {
+					const placeholder = `{${slotType}}`;
+					const spanId = `slot-${i}`;
+					const spanHtml = `<span id="${spanId}" class="slot-pending">[${slotType}]</span>`;
+					html = html.replace(escHtml(placeholder), spanHtml);
+				});
+
+				container.innerHTML = html;
+			}
+
+			function fillSlotInStory(index, value) {
+				const el = document.getElementById(`slot-${index}`);
+				if (el) {
+					el.textContent = value;
+					el.className = "slot-filled";
+				}
+			}
+
+			function highlightActiveSlot(index) {
+				// Reset previous active
+				document.querySelectorAll(".slot-active").forEach((el) => {
+					el.classList.remove("slot-active");
+					el.classList.add("slot-pending");
+				});
+				const el = document.getElementById(`slot-${index}`);
+				if (el) {
+					el.classList.remove("slot-pending");
+					el.classList.add("slot-active");
+				}
+			}
+
+			function updateProgress(filled, total) {
+				const pct = total > 0 ? (filled / total) * 100 : 0;
+				document.getElementById("madlib-progress-fill").style.width = `${pct}%`;
+				document.getElementById("madlib-progress-label").textContent = `${filled}/${total} words`;
+			}
+
+			function resetMadlibUI() {
+				madlibActive = false;
+				myTurn = false;
+				storySlotEls = [];
+				document.getElementById("madlib-panel").classList.add("hidden");
+				document.getElementById("madlib-sidebar").textContent = "No active game";
+				document.getElementById("madlib-turn-box").classList.add("hidden");
+				document.getElementById("chat-input").placeholder = 'type a message, or "new" to start a Madlib...';
+			}
+
+			// ── User list ──────────────────────────────────────────────────────
+			function renderUserList(users) {
+				const container = document.getElementById("user-list");
+				container.innerHTML = users
+					.map((u) => {
+						const isMe = u === myUsername;
+						return `<div class="user-pill ${isMe ? "active-turn" : ""}">${isMe ? "▶ " : ""}${u}</div>`;
+					})
+					.join("");
+			}
+
+			// ── Utils ──────────────────────────────────────────────────────────
+			function escHtml(str) {
+				return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+			}
+		</script>
+	</body>
+</html>
